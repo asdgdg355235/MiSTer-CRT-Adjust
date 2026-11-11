@@ -45,12 +45,12 @@ always @(posedge clk_sys) if (ce_pix) crt_on <= status[101];
 reg signed [4:0] hsize_s;
 always @(posedge clk_sys) if (ce_pix) hsize_s <= $signed(status[100:96]);
 
-// H-Position: 7-bit wrap. 0..48 = +0..+48 (right), 79..127 = -48..-1 (left).
+// H-Position: 7-bit wrap. 0..48 = +0..+48 (right), 49..96 = -48..-1 (left).
 reg [6:0] hpos_d;
 always @(posedge clk_sys) if (ce_pix) hpos_d <= status[85:79];
 wire signed [8:0] hpos_off = (hpos_d <= 7'd48)
     ? $signed({2'b0, hpos_d})
-    : $signed({2'b0, hpos_d}) - 9'sd128;
+    : $signed({2'b0, hpos_d}) - 9'sd97;
 
 // V-Shift: signed 5-bit, -16..+15 lines.
 reg signed [5:0] vshift_off;
@@ -72,13 +72,22 @@ reg  hs_ref_d;
 always @(posedge clk_sys) hs_ref_d <= hs_ref;
 wire hs_ref_rise = hs_ref & ~hs_ref_d;
 
-wire [7:0] rd_period = 8'd64 + {{3{hsize_s[4]}}, hsize_s};  // -16..+15 -> 48..79
-reg  [7:0] rd_acc;
-wire rd_tick = (rd_acc + 8'd4) >= {1'b0, rd_period};
+// Measure the native interval; saturate during stopped clocks / mode changes.
+reg [7:0] pixel_gap = 0, pixel_period = 16;
 always @(posedge clk_sys) begin
-    if      (hs_ref_rise) rd_acc <= 8'd0;
-    else if (rd_tick)     rd_acc <= rd_acc + 8'd4 - {1'b0, rd_period};
-    else                  rd_acc <= rd_acc + 8'd4;
+    if (ce_pix) begin pixel_period <= pixel_gap + 8'd1; pixel_gap <= 0; end
+    else if (pixel_gap != 8'd254) pixel_gap <= pixel_gap + 8'd1;
+end
+wire signed [10:0] period_request = $signed({1'b0, pixel_period, 2'b00})
+                                      + 11'($signed(hsize_s));
+// At most one read per clk. Low ratios cannot support a faster read rate.
+wire [10:0] rd_period = (period_request < 11'sd4) ? 11'd4 : period_request;
+reg [10:0] rd_acc = 0;
+wire rd_tick = (rd_acc + 11'd4) >= {1'b0, rd_period};
+always @(posedge clk_sys) begin
+    if      (hs_ref_rise) rd_acc <= 11'd0;
+    else if (rd_tick)     rd_acc <= rd_acc + 11'd4 - {1'b0, rd_period};
+    else                  rd_acc <= rd_acc + 11'd4;
 end
 wire rd_ce = crt_on ? rd_tick : ce_pix;
 

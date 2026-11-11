@@ -1,5 +1,11 @@
 # CRT V-Size — integration guide
 
+For Groovy's fixed-timing, interlaced integration, see
+[fixed-cabinet.md](fixed-cabinet.md). The original `crt_vsize.sv` below uses
+progressive frame bookkeeping, an eight-subphase Cabinet pipeline & a
+line-sampled VSync delay. Groovy uses the field-local adapter instead.
+
+
 `rtl/crt_vsize.sv` is a **self-contained companion stage** for CRT Adjust:
 vertical stretch/shrink of the analog picture, driven from the OSD, with two
 exclusive modes (**PVM** = line retimer, **Cabinet** = native-timing
@@ -72,7 +78,10 @@ One OSD step = 3 lines (~1.1 %). The negation makes the OSD “+” mean
 ```verilog
 reg signed [5:0] crt_vsize;
 reg              crt_vsmode;
-wire signed [5:0] crt_vsz_step = $signed(status[107:104]);
+wire [3:0] vsz_idx = status[107:104];
+wire signed [5:0] crt_vsz_step = (vsz_idx <= 4'd7)
+    ? $signed({2'b00, vsz_idx})
+    : (vsz_idx <= 4'd14 ? $signed({2'b00, vsz_idx}) - 6'sd15 : 6'sd0);
 always @(posedge CLK_VIDEO) if (ce_pix) begin
     crt_vsize  <= -(crt_vsz_step + (crt_vsz_step <<< 1));  // -3 × step
     crt_vsmode <= status[108];

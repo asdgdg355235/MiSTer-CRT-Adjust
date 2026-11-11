@@ -24,7 +24,10 @@
 //  makes the OSD "+" mean TALLER, consistent with H-Size's "+ = bigger".
 reg signed [5:0] crt_vsize;
 reg              crt_vsmode;
-wire signed [5:0] crt_vsz_step = $signed(status[107:104]);
+wire [3:0] vsz_idx = status[107:104];
+wire signed [5:0] crt_vsz_step = (vsz_idx <= 4'd7)
+    ? $signed({2'b00, vsz_idx})
+    : (vsz_idx <= 4'd14 ? $signed({2'b00, vsz_idx}) - 6'sd15 : 6'sd0);
 always @(posedge CLK_VIDEO) if (ce_pix) begin
 	crt_vsize  <= -(crt_vsz_step + (crt_vsz_step <<< 1));  // -3 x step
 	crt_vsmode <= status[108];

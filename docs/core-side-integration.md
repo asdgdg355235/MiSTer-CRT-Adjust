@@ -142,3 +142,15 @@ pulses).
 See `examples/core_side_snippet.v` for the complete glue. The *shape* transfers
 to any MiSTer arcade core; the exact wiring (clock ratio, mixer/overlay names)
 is core-specific.
+
+## Runtime clock ratios and field timing
+
+PR #3's core-side guidance applies at the video-output boundary: keep true
+VBlank separate from combined DE, carry the stage's CE downstream, & check
+the scandoubler's CE domain. The current examples measure the native period
+for their quarter-cycle read accumulator. Do not copy an older fixed-base
+clock divider into a core with another ratio.
+
+A core-side transform feeds both framework branches. A transform after the
+HDMI tap affects the analog branch plus Direct Video; see the actual signal
+assignments in the consuming `sys_top.v`, rather than its historical README.

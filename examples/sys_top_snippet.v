@@ -20,11 +20,9 @@
 //  crt_on / hsize are forwarded from the core's CONF_STR into sys_top (through
 //  spare hint ports or added wires). Decode like the core-side snippet.
 //
-//  SYS-SIDE POLICY: use this module for H-SIZE ONLY. Its H-Position / V-Shift
-//  move the sync, which the HDMI path follows — that would spoil the
-//  bit-identical HDMI image which is the whole reason to be sys-side. So tie
-//  hoffset/voffset to 0 here and do H-Position / V-Shift with the framework's
-//  own external (analog-DAC-only) shift controls instead.
+//  This example demonstrates H-Size alone. Check the consuming sys_top.v:
+//  a stage after the HDMI tap also keeps its position controls analog-only.
+//  See README.md's placement table for the verified Groovy/NeoGeo routing.
 wire              crt_on;                 // On/Off
 wire signed [4:0] hsize_s;                // signed 5-bit: 0 native, +1..+15 enlarge, -1..-16 shrink
 wire signed [8:0] hpos_off  = 9'sd0;      // keep 0 in sys-side (use framework H-Shift)
@@ -43,13 +41,22 @@ reg  hs_ref_d;
 always @(posedge clk_vid) hs_ref_d <= hs_ref;
 wire hs_ref_rise = hs_ref & ~hs_ref_d;
 
-wire [7:0] rd_period = 8'd64 + {{3{hsize_s[4]}}, hsize_s};  // -16..+15 -> 48..79
-reg  [7:0] rd_acc;
-wire rd_tick = (rd_acc + 8'd4) >= {1'b0, rd_period};
+// Measure the native interval; saturate during stopped clocks / mode changes.
+reg [7:0] pixel_gap = 0, pixel_period = 16;
 always @(posedge clk_vid) begin
-    if      (hs_ref_rise) rd_acc <= 8'd0;
-    else if (rd_tick)     rd_acc <= rd_acc + 8'd4 - {1'b0, rd_period};
-    else                  rd_acc <= rd_acc + 8'd4;
+    if (vga_ce_sl) begin pixel_period <= pixel_gap + 8'd1; pixel_gap <= 0; end
+    else if (pixel_gap != 8'd254) pixel_gap <= pixel_gap + 8'd1;
+end
+wire signed [10:0] period_request = $signed({1'b0, pixel_period, 2'b00})
+                                      + 11'($signed(hsize_s));
+// At most one read per clk. Low ratios cannot support a faster read rate.
+wire [10:0] rd_period = (period_request < 11'sd4) ? 11'd4 : period_request;
+reg [10:0] rd_acc = 0;
+wire rd_tick = (rd_acc + 11'd4) >= {1'b0, rd_period};
+always @(posedge clk_vid) begin
+    if      (hs_ref_rise) rd_acc <= 11'd0;
+    else if (rd_tick)     rd_acc <= rd_acc + 11'd4 - {1'b0, rd_period};
+    else                  rd_acc <= rd_acc + 11'd4;
 end
 wire vga_ce_sl2 = crt_on ? rd_tick : vga_ce_sl;
 

@@ -116,7 +116,8 @@
 module crt_adjust_sys #(
     parameter VTOTAL   = 263,
     parameter HTOTAL   = 384,               // line length in pixels (for the HSync shreg)
-    parameter HPOS_MODE = `HPOS_CONTENTSHIFT // see HPOS_MODE block above
+    parameter HPOS_MODE = `HPOS_CONTENTSHIFT, // see HPOS_MODE block above
+    parameter AW = 10 // total address bits; each ping-pong bank holds 2**(AW-1) samples
 )
 (
     input              clk,
@@ -158,7 +159,8 @@ module crt_adjust_sys #(
     output wire        hs_ref_out
 );
 
-    localparam integer AW = 10;  // 1024 samples per line (ping-pong banks)
+    localparam integer HTW = ($clog2(HTOTAL+1)+1 > 10) ? $clog2(HTOTAL+1)+1 : 10;
+    localparam integer VTW = ($clog2(VTOTAL+1)+1 > 7) ? $clog2(VTOTAL+1)+1 : 7;
 
     // ------------------------------------------------------------------
     //  Input pipeline @ pxl_cen (for latency matching in bypass mode)
@@ -197,9 +199,11 @@ module crt_adjust_sys #(
     //  never runs off into the right-edge black. Clocked @ pxl_cen (native px).
     //  hoffset >0 = right (delay HSync), <0 = left (advance = HTOTAL-|N| tap).
     // ------------------------------------------------------------------
-    wire signed [9:0] hshift_tap = hoffset[8]
-        ? (10'(HTOTAL) + {{1{hoffset[8]}}, hoffset})  // negativo -> HTOTAL - |N|
-        : {1'd0, hoffset};                            // positivo -> N
+    // Keep the total and the sign-extended offset in the same signed width.
+    // Fixed 10/9-bit totals wrap for wide rasters and tall progressive modes.
+    wire signed [HTW-1:0] hshift_tap = hoffset[8]
+        ? HTW'(HTOTAL) + HTW'($signed(hoffset))
+        : HTW'($signed(hoffset));
     reg [HTOTAL-1:0] hsync_pix_shreg;
     initial hsync_pix_shreg = 0;
     always @(posedge clk) if (pxl_cen)
@@ -207,7 +211,7 @@ module crt_adjust_sys #(
     reg hs_shifted;
     initial hs_shifted = 0;
     always @(posedge clk) if (pxl_cen)
-        hs_shifted <= (hshift_tap == 10'd0) ? hs_in : hsync_pix_shreg[hshift_tap - 10'd1];
+        hs_shifted <= (hshift_tap == 0) ? hs_in : hsync_pix_shreg[hshift_tap - 1'b1];
 
     // HSync reference for the WHOLE line-buffer engine: the shifted HSync in
     // HPOS_SYNCSHIFT, the native HSync otherwise. Like the reference upstream
@@ -331,9 +335,10 @@ module crt_adjust_sys #(
     // In HPOS_SYNCSHIFT the horizontal offset is applied to HSync out (see below),
     // NOT to the read window: the content stays anchored natively, so the read
     // offset is forced to 0 here and hb1/hb0 keep gating the native active area.
-    wire signed [AW+1:0] hoff_s  = (HPOS_MODE == `HPOS_CONTENTSHIFT)
-                                   ? $signed(hoffset)
-                                   : {(AW+2){1'b0}};
+    // PR #4: widen before the unsigned conditional arm can zero-extend it.
+    wire signed [AW+1:0] hoff_ext = (AW+2)'($signed(hoffset));
+    wire signed [AW+1:0] hoff_s = (HPOS_MODE == `HPOS_CONTENTSHIFT)
+                                   ? hoff_ext : {(AW+2){1'b0}};
     wire signed [AW+1:0] rdcnt_s = $signed({2'b0, rdcnt});
     wire signed [AW+1:0] hb1_s   = $signed({2'b0, hb1});
     wire signed [AW+1:0] hb0_s   = $signed({2'b0, hb0});
@@ -348,9 +353,9 @@ module crt_adjust_sys #(
     //  linea (voffset signed). Sposta il VSync, non il contenuto: verticalmente
     //  il CRT ha ampia tolleranza -> nessun desync. hs_rise_in = fine riga.
     // ------------------------------------------------------------------
-    wire signed [8:0] vshift_tap = voffset[5]
-        ? (9'(VTOTAL) + {{3{voffset[5]}}, voffset})   // negativo -> VTOTAL - |N|
-        : {3'd0, voffset};                            // positivo -> N
+    wire signed [VTW-1:0] vshift_tap = voffset[5]
+        ? VTW'(VTOTAL) + VTW'($signed(voffset))
+        : VTW'($signed(voffset));
     reg [VTOTAL-1:0] vsync_line_shreg;
     initial vsync_line_shreg = 0;
     always @(posedge clk) if (hs_rise_in)
@@ -358,7 +363,7 @@ module crt_adjust_sys #(
     reg vs_shifted;
     initial vs_shifted = 0;
     always @(posedge clk) if (hs_rise_in)
-        vs_shifted <= (vshift_tap == 9'd0) ? vs_in : vsync_line_shreg[vshift_tap - 9'd1];
+        vs_shifted <= (vshift_tap == 0) ? vs_in : vsync_line_shreg[vshift_tap - 1'b1];
 
     // HSync emitted by the module: shifted only in HPOS_SYNCSHIFT, else native.
     // (hsync_pix_shreg / hs_shifted are computed above, before the read side.)

@@ -1,5 +1,11 @@
 # V-Size — vertical stretch/shrink at 15 kHz (design)
 
+For Groovy's fixed-timing, interlaced integration, see
+[fixed-cabinet.md](fixed-cabinet.md). The original `crt_vsize.sv` below uses
+progressive frame bookkeeping, an eight-subphase Cabinet pipeline & a
+line-sampled VSync delay. Groovy uses the field-local adapter instead.
+
+
 > **DECISIONE FINALE (2026-08-05, dopo entrambi i test HW):** il RETIMER e` il
 > meccanismo definitivo. La variante "content-scale a timing nativo" (v3,
 > dup/skip righe) e` stata provata e SCARTATA: gli artefatti di duplicazione

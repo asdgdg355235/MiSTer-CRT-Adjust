@@ -157,55 +157,32 @@ and desync when shrinking.
 
 ---
 
-## Two variants — pick by *where you can wire it*
+## Placement and HDMI routing
 
-The engine is identical in both files. They are separate only because the
-**hook-up point is different**, and that changes what happens to HDMI.
+The two `crt_adjust` variants contain the same engine. Their insertion point
+in `sys_top.v` determines which outputs receive the changes.
 
-| | **core-side** — [`rtl/crt_adjust.sv`](rtl/crt_adjust.sv) | **sys-side** — [`rtl/crt_adjust_sys.sv`](rtl/crt_adjust_sys.sv) |
+| Placement | Analog VGA | Scaled HDMI |
 |---|---|---|
-| Where you insert it | inside your core's `emu` wrapper, at the video-output boundary | inside `sys_top.v`, on the analog DAC branch only |
-| `sys_top.v` edits | **none** — framework untouched | **yes** (steps outside the MiSTer-devel rules) |
-| HDMI | **follows the adjust** (whole video path is resized) | H-Size stays off HDMI (tapped above the insertion point); the module's **H-Pos / V-Shift do reach HDMI** |
-| Use it when | the normal case — released, rule-compliant cores | you specifically want HDMI bit-identical AND can edit `sys_top.v` |
+| Core output, before the framework split | Adjusted | Receives the adjusted pixels, DE & sync |
+| Analog branch, after the HDMI tap | Adjusted | Receives the earlier, unadjusted stream |
 
-**Recommended: core-side** (`crt_adjust.sv`). Zero framework changes, so it does
-not break the MiSTer-devel rule against touching `sys/` — which is why released
-cores ship it, and why it is the default choice. The trade-off: the whole video
-path is adjusted, so HDMI follows the stretch while CRT Adjust is `On` (leave it
-`Off` for an untouched HDMI image).
+In `asdgdg355235/Groovy_MiSTer/sys/sys_top.v`, the HDMI signals
+`ce_hpix/hr_out/hg_out/hb_out/hhs_fix/hvs_fix/hde_emu` come from `vga_*_sl`.
+The `vga_osd` instance also consumes that stream. Inserting a stage between
+this tap & `vga_osd` therefore keeps **all** its adjustments off scaled HDMI.
+`rmonic79/rmNeoGeo_MiSTer`, branch `streamer`, uses that arrangement.
+Direct Video taps the later analog/OSD path & follows its adjustments.
 
-**sys-side** (`crt_adjust_sys.sv`) exists for the case where you want the CRT
-fitted **and** a bit-identical HDMI picture at the same time. Because it sits
-only on the analog DAC branch, **H-Size** never reaches the HDMI scaler. But the
-module's **H-Position and V-Shift move the sync**, which HDMI does follow — so in
-sys-side use the module for **H-Size only**, and do H-Position / V-Shift with the
-framework's own external shift controls (which act on the analog DAC alone).
-The cost of this path is editing `sys_top.v`, vendored framework code that is not
-upstreamed and gets clobbered when you resync `sys/`.
+The Groovy integration instead runs the Cabinet scaler core-side, before its
+existing horizontal controls. HDMI consequently receives the processed image.
+It adds a Groovy-only vertical OSD anchor because the framework centers its
+menu from the measured DE window. Other cores retain the original OSD port
+list when `GROOVY_CRT_GEOMETRY` is undefined.
 
-Functionally the engine is identical: same three controls, same `HPOS_MODE`
-choice — the difference is only where you insert it and what that does to HDMI.
-
-> **Field note (2026-08-05, code-verified on the current MiSTer framework —
-> NeoGeo_MiSTer sys, first sys-side integration in
-> [NeoGeo_MiSTer_Streamer](https://github.com/rmonic79/NeoGeo_MiSTer_Streamer)):**
-> the HDMI scaler taps the slot-line stream **above** the insertion point
-> (`ce_hpix/hr_out/hhs_fix/hvs_fix/hde_emu` are assigned from `vga_*_sl`), so
-> **all three controls — H-Size, H-Position AND V-Shift — stay on the analog
-> branch only**: the module's shifted syncs never reach the HDMI scaler. The
-> "H-Pos/V-Shift reach HDMI" caveat above does not apply to this framework
-> version. The only HDMI mode that follows the adjust is `direct_video`
-> (it taps post-OSD), which is itself a CRT-style output, so that is the
-> desired behavior. Two integration rules confirmed:
-> 1. `vb_in` MUST be the core's TRUE vertical blank, forwarded from the emu
->    (e.g. an added `CRT_VBL` port). Feeding the combined blank (`~vga_de_sl`)
->    like the legacy `analog_hsize` glue did gives a BLACK SCREEN with this
->    engine: at every HSync rise the combined blank is 1, so `vb_active`
->    latches 1 on every line and `pass_q` never opens.
-> 2. Gate `active` off in the core when the scandoubler is enabled — the
->    read-rate base assumes the native (15 kHz) pixel-CE ratio.
-> HW test pending; engine is line-for-line the HW-proven core-side one.
+Feed the true vertical blank to `vb_in`; combined blanking is not a vertical
+boundary. Forward each stage's output blanking & CE to the next stage. Reset
+the CRT Adjust read accumulator on `hs_ref_out`, including SYNCSHIFT mode.
 
 > **Legacy:** the original stretch-only modules live in
 > [`rtl/old/`](rtl/old/) — `analog_hsize.sv` (sys-side) and
@@ -214,13 +191,16 @@ choice — the difference is only where you insert it and what that does to HDMI
 
 ---
 
-## Resource cost
+## Storage capacity
 
-| Resource | Amount |
-|---|---|
-| M10K BRAM | ~1 (24-bit line buffer, ping-pong banks) |
-| ALM | ~50 |
-| DSP | 0 |
+`AW` is the total ping-pong address width. Each bank holds `2**(AW-1)`
+samples, including blanking. The default `AW=10` provides 512 samples per
+bank & 24,576 bits of RGB storage. Select `AW` so a whole raster line fits.
+For example, a 2570-pixel total needs `AW=13`, giving 4096 samples per bank.
+HSync & VSync tap widths also follow the configured totals.
+
+These are logical storage counts. Obtain M10K packing, ALM, DSP & timing
+figures from the Quartus build for the consuming core.
 
 ---
 
@@ -263,11 +243,11 @@ reg  crt_on;   always @(posedge clk_sys) if (ce_pix) crt_on   <= status[101];
 reg signed [4:0] hsize_s;  always @(posedge clk_sys) if (ce_pix) hsize_s <= $signed(status[100:96]);
 reg signed [5:0] vshift_s; always @(posedge clk_sys) if (ce_pix) vshift_s <= $signed(status[78:74]);
 
-// H-Position: 0..48 = right (+), 79..127 = left (-)
+// H-Position: 0..48 = right (+), 49..96 = left (-)
 reg [6:0] hpos_d; always @(posedge clk_sys) if (ce_pix) hpos_d <= status[85:79];
 wire signed [8:0] hpos_off = (hpos_d <= 7'd48)
     ? $signed({2'b0, hpos_d})
-    : $signed({2'b0, hpos_d}) - 9'sd128;
+    : $signed({2'b0, hpos_d}) - 9'sd97;
 ```
 
 ### 4. Generate the read clock-enable
@@ -284,13 +264,23 @@ wire hs_ref;                       // from the module (registered -> no comb loo
 reg  hs_ref_d; always @(posedge clk_sys) hs_ref_d <= hs_ref;
 wire hs_ref_rise = hs_ref & ~hs_ref_d;
 
-wire [7:0] rd_period = 8'd64 + {{3{hsize_s[4]}}, hsize_s};  // -16..+15 -> 48..79 quarters
-reg  [7:0] rd_acc;
-wire rd_tick = (rd_acc + 8'd4) >= {1'b0, rd_period};
+// Measure the native interval; saturate during stopped clocks / mode changes.
+reg [7:0] pixel_gap = 0, pixel_period = 16;
 always @(posedge clk_sys) begin
-    if      (hs_ref_rise) rd_acc <= 8'd0;
-    else if (rd_tick)     rd_acc <= rd_acc + 8'd4 - {1'b0, rd_period};
-    else                  rd_acc <= rd_acc + 8'd4;
+    if (ce_pix) begin pixel_period <= pixel_gap + 8'd1; pixel_gap <= 0; end
+    else if (pixel_gap != 8'd254) pixel_gap <= pixel_gap + 8'd1;
+end
+wire signed [10:0] period_request = $signed({1'b0, pixel_period, 2'b00})
+                                      + 11'($signed(hsize_s));
+// At most one read per clk. Low ratios cannot support a faster read rate.
+wire [10:0] rd_period = (period_request < 11'sd4) ? 11'd4 : period_request;
+
+reg [10:0] rd_acc = 0;
+wire rd_tick = (rd_acc + 11'd4) >= {1'b0, rd_period};
+always @(posedge clk_sys) begin
+    if      (hs_ref_rise) rd_acc <= 11'd0;
+    else if (rd_tick)     rd_acc <= rd_acc + 11'd4 - {1'b0, rd_period};
+    else                  rd_acc <= rd_acc + 11'd4;
 end
 wire rd_ce = crt_on ? rd_tick : ce_pix;
 ```
@@ -355,12 +345,9 @@ analog DAC pins. HDMI taps the stream above that point, so the **H-Size** stretc
 never reaches it. Reference glue:
 [`examples/sys_top_snippet.v`](examples/sys_top_snippet.v).
 
-> **Use it for H-Size only.** The whole reason to go sys-side is a bit-identical
-> HDMI image. H-Size delivers that (it lives on the DAC branch), but the module's
-> **H-Position and V-Shift move the sync, which HDMI follows** — turning them on
-> would spoil the clean HDMI picture. So in sys-side do H-Position / V-Shift with
-> the framework's own external shift controls (which act on the analog DAC
-> alone), and let the module handle H-Size.
+Check the HDMI tap in the actual framework before selecting this placement.
+The reference snippet ties position inputs to zero to demonstrate H-Size alone;
+that wiring does not limit the module's other controls.
 
 > **Heads up:** this edits `sys/sys_top.v`, upstream framework code — which steps
 > outside the MiSTer-devel rule against modifying `sys/`. The change is small and
@@ -413,3 +400,14 @@ The **CRT Adjust** module (H-Size + H-Position + V-Shift, with the parametric
 GNU GPL v3 or later. Compatible with the MiSTer framework license.
 
 Author: Umberto Parisi ([rmonic79](https://github.com/rmonic79)), 2026.
+
+## Fixed-timing Cabinet integration
+
+For field-local scaling, CE ratios below eight, or unchanged half-line sync,
+use [`rtl/crt_vsize_fixed.sv`](rtl/crt_vsize_fixed.sv). Its interface, storage
+bounds, latency, clipping & tests are in
+[`docs/fixed-cabinet.md`](docs/fixed-cabinet.md).
+
+The five upstream PR decisions are recorded in
+[`docs/upstream-review.md`](docs/upstream-review.md). Run
+`python3 tests/run_tests.py` with Icarus, Verilator & a C++ compiler installed.

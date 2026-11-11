@@ -1,5 +1,11 @@
 # V-Size — roadmap anti-desync (chassis arcade AFC stretto)
 
+For Groovy's fixed-timing, interlaced integration, see
+[fixed-cabinet.md](fixed-cabinet.md). The original `crt_vsize.sv` below uses
+progressive frame bookkeeping, an eight-subphase Cabinet pipeline & a
+line-sampled VSync delay. Groovy uses the field-local adapter instead.
+
+
 2026-08-05. Obiettivo: estendere il range utile del retimer V-Size sui
 monitor arcade che oggi perdono l'aggancio a ~1-2% di deviazione HSync.
 Vincoli fermi: frame rate del gioco intoccabile; niente righe duplicate,
