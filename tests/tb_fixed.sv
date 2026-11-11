@@ -9,11 +9,22 @@ module tb_fixed #(parameter LINE_PX=32, WIDE_ONLY=0);
     wire [23:0] out;
     wire co,c2o,ho,vo,hbo,vbo,fo,run,underrun;
     wire [15:0] oh;
-    crt_vsize_fixed #(.LINE_PX(LINE_PX)) dut (
+    crt_vsize_fixed #(.LINE_PX(LINE_PX),.MLAB_PARTS(1)) dut (
         .clk(clk),.reset(reset),.ce_in(ce),.ce2_in(ce2),.size(size),.width(width),.height(height),
         .rgb_in(rgb),.hs_in(hs),.vs_in(vs),.hb_in(hb),.vb_in(vb),.field_in(field),
         .rgb_out(out),.ce_out(co),.ce2_out(c2o),.hs_out(ho),.vs_out(vo),.hb_out(hbo),.vb_out(vbo),
         .field_out(fo),.running(run),.underrun(underrun),.picture_height(oh));
+    wire [23:0] ref_rgb;
+    wire [6:0] ref_timing;
+    wire ref_run, ref_underrun;
+    wire [15:0] ref_height;
+    crt_vsize_reference #(.LINE_PX(LINE_PX)) reference (
+        .clk(clk),.reset(reset),.ce_in(ce),.ce2_in(ce2),.size(size),.width(width),.height(height),
+        .rgb_in(rgb),.hs_in(hs),.vs_in(vs),.hb_in(hb),.vb_in(vb),.field_in(field),
+        .rgb_out(ref_rgb),.ce_out(ref_timing[6]),.ce2_out(ref_timing[5]),
+        .hs_out(ref_timing[4]),.vs_out(ref_timing[3]),.hb_out(ref_timing[2]),
+        .vb_out(ref_timing[1]),.field_out(ref_timing[0]),.running(ref_run),
+        .underrun(ref_underrun),.picture_height(ref_height));
     reg [6:0] timing[0:4];
     reg [23:0] colors[0:4];
     reg [4:0] valid=0;
@@ -49,6 +60,11 @@ module tb_fixed #(parameter LINE_PX=32, WIDE_ONLY=0);
         #1;
         if(reset) fault_seen=0;
         if(checking) begin
+            if({co,c2o,ho,vo,hbo,vbo,fo,run,underrun,oh} !==
+               {ref_timing,ref_run,ref_underrun,ref_height})
+                $fatal(1,"packed memory changed control metadata");
+            if(co && !hbo && !vbo && out !== ref_rgb)
+                $fatal(1,"packed memory changed active RGB at x=%0d y=%0d",px,py);
             if(!run) begin
                 if({co,c2o,ho,vo,hbo,vbo,fo,out} !== {ce,ce2,hs,vs,hb,vb,field,rgb})
                     $fatal(1,"bypass changed video");
@@ -85,7 +101,7 @@ module tb_fixed #(parameter LINE_PX=32, WIDE_ONLY=0);
                         for(t=0;t<ratio;t=t+1) begin
                             @(negedge clk);
                             if(inject && f==1 && y==20 && x==8 && t==0) begin
-                                force dut.complete=0; injected=1;
+                                force dut.complete=0; force reference.complete=0; injected=1;
                             end
                             ce=t==0; ce2=(t==ratio/2); hs=(x>=w+16 && x<w+24);
                             hb=(x<8 || x>=w+8); vb=y>=h;
@@ -101,6 +117,7 @@ module tb_fixed #(parameter LINE_PX=32, WIDE_ONLY=0);
             if(inject) begin
                 if(!fault_seen) $fatal(1,"underrun injection not observed");
                 release dut.complete;
+                release reference.complete;
             end
             checked_pixels=0;
             $display("PASS: Cabinet delta=%0d CE=%0d width=%0d height=%0d interlace=%0d front=%0d",d,ratio,w,h,interlace,front);
@@ -110,7 +127,14 @@ module tb_fixed #(parameter LINE_PX=32, WIDE_ONLY=0);
     initial begin
         if(WIDE_ONLY) begin
             scenario(7,1,2560,240,0,12);
+            scenario(-7,2,2559,240,1,12);
         end else begin
+        // All five packing lanes, short rows and partial groups. Keep the
+        // source rows short enough to exercise repeated ring wrap as well.
+        for(r=1;r<=LINE_PX;r=r+1) begin
+            scenario(7,1,r,48,0,12);
+            scenario(-7,2,r,49,1,12);
+        end
         for(d=-7;d<=7;d=d+1) scenario(d,8,16,240,0,12);
         for(r=1;r<=16;r=r*2) begin
             scenario(7,r,16,240,1,12);

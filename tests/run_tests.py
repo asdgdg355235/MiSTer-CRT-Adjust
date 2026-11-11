@@ -62,12 +62,18 @@ end endmodule
         run('tb_divider', [bench], tmp)
 
         # The parallel scaler test matrix runs faster as compiled RTL.
+        # Compare against the actual pre-packing implementation, independently
+        # of the analytical pixel/timing scoreboard in tb_fixed.
+        reference = tmp/'crt_vsize_reference.sv'
+        reference.write_text(subprocess.check_output(['git','show',
+            '04be786998d04769238b09190df1e36279f6e84a:rtl/crt_vsize_fixed.sv'],
+            cwd=ROOT,text=True).replace('module crt_vsize_fixed', 'module crt_vsize_reference',1))
         verilator = shlex.split(os.environ.get('VERILATOR', 'verilator'))
         for name, parameters in [('small', []), ('wide', ['-GLINE_PX=2560','-GWIDE_ONLY=1'])]:
             build = tmp/name
             result = subprocess.run(verilator + ['--binary','--timing','-Wno-fatal','--top-module','tb_fixed',
                                     '-j','2','--Mdir',str(build)] + parameters +
-                                    [str(ROOT/'rtl/crt_vsize_fixed.sv'),str(ROOT/'tests/tb_fixed.sv')],
+                                    [str(ROOT/'rtl/crt_vsize_fixed.sv'),str(reference),str(ROOT/'tests/tb_fixed.sv')],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             if result.returncode:
                 print(result.stdout)

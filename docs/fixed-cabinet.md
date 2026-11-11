@@ -42,6 +42,25 @@ untouched.
 
 Each RGB bank has one synchronous read port & one write port. Consecutive
 source rows occupy opposite banks. Reads do not require duplicated RGB RAM.
+Five consecutive RGB888 pixels are packed into 120 bits, split across three
+40-bit lanes in each bank. Short final groups flush on the last active pixel;
+each row starts a new group. The read pixel selector is registered beside the
+RAM read, preserving the existing pixel/sync pipeline latency.
+
+At the default dimensions each lane is 3072 words deep. With `MLAB_PARTS=0`
+(default), six 3072x40 stores map geometrically to 72 M10Ks in 256x40 mode.
+Groovy selects `MLAB_PARTS=1`: two lanes use 384 distributed MLABs in 32x20
+mode; the other four require 48 M10Ks. These are capacity calculations, not
+fitted results. One MLAB lane per bank moves 245760 bits to distributed RAM,
+trading logic-array capacity for M10Ks without dropping pixels, colour bits
+or lines. `MLAB_PARTS` accepts 0..3; consumers must check their device's MLAB
+capacity, logic use & timing before selecting a nonzero value.
+
+Reference basis: Cyclone V Device Handbook, Volume 1, sections "MLAB" &
+"M10K Blocks Mixed-Width Configurations" describe 32x20 MLAB & 256x40 M10K
+simple dual-port storage. The original field scheduler & gamma interpolation
+remain those in this fork at `04be786998d04769238b09190df1e36279f6e84a`.
+
 A Q16 inverse-coordinate step is divided once during vertical blank, then
 advanced per output row. Parallel gamma decoding, weighted blending & the
 split square-root encoder accept one pixel per clock. The eight-clock CE
@@ -60,6 +79,13 @@ maximum reduction requires nine lines of initial lead. There is no added
 full-frame delay. The fixed pixel pipeline adds four `clk` periods to the
 line storage delay. M10K packing, DSP mapping & timing closure require the
 consuming core's Quartus fit; the logical bit count is not a fit report.
+
+Run `python3 tests/run_tests.py` for the simulation matrix, including active
+RGB/control comparison against the pre-packing RTL, widths 1..32, 2559/2560,
+both field parities, partial groups, ring wrap & reset recovery. Optional
+`python3 tests/check_storage.py` requires Yosys & checks that both memory
+allocations infer six unreplicated, synchronous 3072x40 stores. A successful
+host test does not establish that the complete consuming core fits.
 
 ## Edge masking
 
